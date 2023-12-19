@@ -3,13 +3,6 @@
 (require 'json)
 (require 'wid-edit)
 
-
-(comment
-  (symbol-file 'foxmacs-dashboard)
-  (foxmacs-install-deps)
-  (foxmacs-ensure-venv))
-
-
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defclass foxmacs-dashbord-state ()
@@ -33,14 +26,15 @@
 ;;   (slot-value foxmacs--state 'port))
 
 (cl-defmethod foxmacs-state-ensure-connection ((state foxmacs-dashbord-state))
-  (when-let ((proc (slot-value state 'python-process)))
-    (when (process-live-p proc)
-      (foxmacs-process-stop)))
-  (setf (slot-value state 'python-process) (foxmacs-process-start))
-
-  (let ((host (slot-value state 'host))
-        (port (slot-value state 'port)))
-    (foxmacs-process-command `(:command "connect" :payload (:host ,host :port ,port)))))
+  ;; (when-let ((proc (slot-value state 'python-process)))
+  ;;   (when (process-live-p proc)
+  ;;     (foxmacs-process-stop)))
+  (unless (and (slot-value state 'python-process)
+               (process-live-p (slot-value state 'python-process)))
+    (setf (slot-value state 'python-process) (foxmacs-process-start))
+    (let ((host (slot-value state 'host))
+          (port (slot-value state 'port)))
+      (foxmacs-process-connect))))
 
 
 ;; (makunbound 'foxmacs--state)
@@ -77,6 +71,7 @@
   ;; ... other keybindings
   ;; (widget-minor-mode 1)
   (setq-local truncate-lines nil)
+  (toggle-truncate-lines 1)
   (setq-local word-wrap t)
   (setq-local show-trailing-whitespace nil)
   ;; (read-only-mode 1)
@@ -110,12 +105,11 @@
   (interactive)
   (with-current-buffer "*foxmacs*"
     (let* ((code (widget-value foxmacs-dashboard--eval-js-input-widget))
-           (result (foxmacs-process-command `(:command "eval-js" :payload (:code ,code :frame ,(foxmacs-state-selected-frame foxmacs--state))))))
+           (result (foxmacs-eval-js code)))
       (save-excursion
         (widget-value-set
          foxmacs-dashboard--eval-js-result-widget
-         (let ((json-encoding-pretty-print t))
-           (json-encode (gethash "result" result))))))))
+         (foxmacs-eval-result-result result))))))
 
 (defun foxmacs-dashboard-render ()
   ""
@@ -124,8 +118,10 @@
         last-html-input)
     (when-let ((buf (get-buffer "*foxmacs*")))
       (with-current-buffer buf
-        (setq last-js-input (widget-value foxmacs-dashboard--eval-js-input-widget))
-        (setq last-html-input (widget-value foxmacs-dashboard--eval-html-input-widget))
+        (when foxmacs-dashboard--eval-js-input-widget
+          (setq last-js-input (widget-value foxmacs-dashboard--eval-js-input-widget)))
+        (when foxmacs-dashboard--eval-html-input-widget
+         (setq last-html-input (widget-value foxmacs-dashboard--eval-html-input-widget)))
         (kill-all-local-variables)
         (remove-overlays)))
    (foxmacs-dashboard--with-buffer
@@ -138,38 +134,44 @@
       (let ((inhibit-read-only t))
         (erase-buffer))
 
-      (let* ((tab-info (foxmacs-process-command '(:command "tab-info")))
-             (title (gethash "title" tab-info))
-             (url (gethash "url" tab-info)))
-        (widget-insert "Title: ")
-        (widget-insert title)
-        (widget-insert "\n")
-        (widget-insert "URL: ")
-        (widget-insert url))
+      ;; (with-slots (title url visible) (car (foxmacs-tab-infos))
+      ;;   title)
+
+      (lexical-let ((tabs (foxmacs-tab-infos)))
+        (apply #'widget-create
+              'radio-button-choice
+              :value (cl-loop for info in tabs
+                              when (foxmacs-tab-info-visible info)
+                              return (foxmacs-tab-info-handle info))
+              :notify (lambda (wid &rest ignore)
+                        (let ((tab (cl-find-if (lambda (info)
+                                                 (string= (foxmacs-tab-info-handle info) (widget-value wid)))
+                                               tabs)))
+                          (foxmacs-tab-info-activate tab)
+                        ;;(setf (foxmacs-state-selected-frame foxmacs--state) (widget-value wid))
+                        ))
+
+              (cl-loop for info in (foxmacs-tab-infos)
+                       collect (with-slots (title url visible handle) info
+                                 `(item :tag ,(format "%s \"%s\"" url title)
+                                        :value ,handle)))))
 
       (widget-insert "\n\n")
 
-      (let ((frames (gethash "frames" (foxmacs-process-command '(:command "list-frames")))))
-
-
-
-        (print frames)
+      (let ((frames (foxmacs-frames)))
         (widget-insert "Frames:\n")
 
         (apply #'widget-create
                'radio-button-choice
-               :value "One"
+               :value (slot-value foxmacs--state 'selected-frame)
                :notify (lambda (wid &rest ignore)
                          (setf (foxmacs-state-selected-frame foxmacs--state) (widget-value wid)))
 
                '(item :tag "Default" :value nil)
 
-               (cl-loop for frame across frames
-                        collect (let ((id (gethash "id" frame))
-                                      (url (gethash "url" frame))
-                                      (title (gethash "title" frame))
-                                      (toplevel (gethash "isTopLevel" frame)))
-                                  `(item :tag ,(format "%s: url=%s title=%s toplevel=%s\n" id url title toplevel)
+               (cl-loop for frame in frames
+                        collect (with-slots (id src) frame
+                                  `(item :tag ,(format "id=%s src=%s\n" id src)
                                          :value ,id)))))
 
       (widget-insert "\n\n")
@@ -189,9 +191,9 @@
                                    :notify (lambda (widget &rest _ignore)
                                              (message "got text %s" (widget-value widget)))
                                    :keymap eval-js-keymap
-                                   (or last-js-input "// eval javascript\n\n"))))
+                                   (or last-js-input "// eval javascript\n"))))
 
-      (widget-insert "\n\n")
+      (widget-insert "\n")
 
       (setq-local foxmacs-dashboard--eval-js-result-widget
                   (widget-create 'text :format "%v" ""))
@@ -234,6 +236,9 @@
 (defun foxmacs-dashboard ()
   ""
   (interactive)
+  (foxmacs-process-reset)
+  (when foxmacs--state
+    (setf (slot-value foxmacs--state 'selected-frame) nil))
   (foxmacs-dashboard-render))
 
 (defun foxmacs-dashboard-quit ()
