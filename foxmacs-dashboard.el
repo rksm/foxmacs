@@ -3,6 +3,8 @@
 (require 'json)
 (require 'wid-edit)
 
+(require 'foxmacs-selenium)
+
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
 (defclass foxmacs-dashbord-state ()
@@ -17,7 +19,7 @@
    (selected-frame :initarg :selected-frame
                    :initform nil
                    :documentation "The selected frame."
-                   :accessor fomxacs-state-selected-frame)
+                   :accessor foxmacs-state-selected-frame)
    (python-process :initarg :python-process
                    :initform nil
                    :documentation "The python process running geckordp.")))

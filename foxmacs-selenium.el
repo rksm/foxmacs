@@ -267,4 +267,4 @@
 
 ;; -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-(provide 'foxmacs-browser)
+(provide 'foxmacs-selenium)
